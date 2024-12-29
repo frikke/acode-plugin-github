@@ -1,4 +1,17 @@
 {
   "dart.lineLength": 50,
   "prettier.printWidth": 50,
+  "cSpell.words": [
+    "acode",
+    "Ajit",
+    "clearcache",
+    "deadlyjack",
+    "deletegist",
+    "deletegistfile",
+    "Kumar",
+    "opengist",
+    "pallete",
+    "selectrepo",
+    "updatetoken"
+  ],
 }

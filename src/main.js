@@ -4,11 +4,14 @@ import githubFs from './githubFs';
 
 const prompt = acode.require('prompt');
 const confirm = acode.require('confirm');
-const pallete = acode.require('pallete');
+const palette = acode.require('palette') || acode.require('pallete');
 const helpers = acode.require('helpers');
 const multiPrompt = acode.require('multiPrompt');
 const openFolder = acode.require('openFolder');
 const EditorFile = acode.require('EditorFile');
+const appSettings = acode.require('settings');
+const toast = acode.require('toast');
+const fsOperation = acode.require('fsOperation');
 
 if (!Blob.prototype.arrayBuffer) {
   Blob.prototype.arrayBuffer = function () {
@@ -24,25 +27,45 @@ if (!Blob.prototype.arrayBuffer) {
 class AcodePlugin {
   token = '';
   NEW = `${helpers.uuid()}_NEW`;
-  #cacheFile;
   #fsInitialized = false;
   #repos = [];
   #gists = [];
 
-  async init($page, cacheFile) {
-    this.#cacheFile = cacheFile;
+  async init() {
     this.commands.forEach(command => {
       editorManager.editor.commands.addCommand(command);
     });
 
-    this.token = await this.#cacheFile.readFile('utf8');
+    this.token = localStorage.getItem('github-token');
     await this.initFs();
+
+    tutorial(plugin.id, (hide) => {
+      const commands = editorManager.editor.commands.byName;
+      const openCommandPalette = commands.openCommandPalette || commands.openCommandPallete;
+      const message = "Github plugin is installed successfully, open command palette and search 'open repository' to open a github repository.";
+      let key = 'Ctrl+Shift+P';
+      if (openCommandPalette) {
+        key = openCommandPalette.bindKey.win;
+      }
+
+      if (!key) {
+        const onclick = async () => {
+          const EditorFile = acode.require('EditorFile');
+          const fileInfo = await fsOperation(KEYBINDING_FILE).stat();
+          new EditorFile(fileInfo.name, { uri: KEYBINDING_FILE, render: true });
+          hide();
+        };
+        return <p>{message} Shortcut to open command pallete is not set, <span className='link' onclick={onclick}>Click here</span> set shortcut or use '...' icon in quick tools.</p>
+      }
+
+      return <p>{message} To open command palette use combination {key} or use '...' icon in quick tools.</p>;
+    });
   }
 
   async initFs() {
     if (this.#fsInitialized) return;
     githubFs.remove();
-    githubFs(this.getToken.bind(this));
+    githubFs(this.getToken.bind(this), this.settings);
     this.#fsInitialized = true;
   }
 
@@ -62,7 +85,7 @@ class AcodePlugin {
   async openRepo() {
     await this.initFs();
     this.token = await this.getToken();
-    pallete(
+    palette(
       this.listRepositories.bind(this),
       this.selectBranch.bind(this),
       'Type to search repository',
@@ -71,7 +94,7 @@ class AcodePlugin {
 
   async selectBranch(repo) {
     const [user, repoName] = repo.split('/');
-    pallete(
+    palette(
       this.listBranches.bind(this, user, repoName),
       (branch) => this.openRepoAsFolder(user, repoName, branch)
         .catch(helpers.error),
@@ -82,7 +105,7 @@ class AcodePlugin {
   async deleteGist() {
     await this.initFs();
     const gist = await new Promise((resolve) => {
-      pallete(
+      palette(
         this.listGists.bind(this, false),
         resolve,
         'Type to search gist',
@@ -101,7 +124,7 @@ class AcodePlugin {
   async deleteGistFile() {
     await this.initFs();
     const gist = await new Promise((resolve) => {
-      pallete(
+      palette(
         this.listGists.bind(this, false),
         resolve,
         'Type to search gist',
@@ -109,7 +132,7 @@ class AcodePlugin {
     });
 
     const file = await new Promise((resolve) => {
-      pallete(
+      palette(
         this.listGistFiles.bind(this, gist, false),
         resolve,
         'Type to search file',
@@ -165,6 +188,7 @@ class AcodePlugin {
     const url = githubFs.constructUrl('repo', user, repoName, '/', branch);
     openFolder(url, {
       name: `${user}/${repoName}/${branch}`,
+      saveState: false,
     });
   }
 
@@ -172,7 +196,7 @@ class AcodePlugin {
     await this.initFs();
     this.token = await this.getToken();
 
-    pallete(
+    palette(
       this.listGists.bind(this),
       this.openGistFile.bind(this),
       'Type to search gist',
@@ -235,7 +259,7 @@ class AcodePlugin {
       helpers.removeTitleLoader();
     } else {
       await new Promise((resolve) => {
-        pallete(
+        palette(
           this.listGistFiles.bind(this, gist),
           async (file) => {
             if (file === this.NEW) {
@@ -292,7 +316,7 @@ class AcodePlugin {
     if (result) {
       this.token = result;
       this.#fsInitialized = false;
-      await this.#cacheFile.writeFile(result);
+      localStorage.setItem('github-token', result);
       await this.initFs();
     }
   }
@@ -373,7 +397,7 @@ class AcodePlugin {
 
     if (showAddNew) {
       list.push({
-        text: this.#highlitedText('New gist'),
+        text: this.#highlightedText('New gist'),
         value: this.NEW,
       });
     }
@@ -405,7 +429,7 @@ class AcodePlugin {
 
     if (showAddNew) {
       list.push({
-        text: this.#highlitedText('New file'),
+        text: this.#highlightedText('New file'),
         value: this.NEW,
       });
     }
@@ -413,7 +437,7 @@ class AcodePlugin {
     return list;
   }
 
-  #highlitedText(text) {
+  #highlightedText(text) {
     return `<span style='text-transform: uppercase; color: var(--popup-active-color)'>${text}</span>`;
   }
 
@@ -477,6 +501,53 @@ class AcodePlugin {
       }
     ]
   }
+
+  get settings() {
+    const settings = appSettings.value[plugin.id];
+    if (!settings) {
+      appSettings.value[plugin.id] = {
+        askCommitMessage: true,
+      };
+      appSettings.update();
+    }
+    return appSettings.value[plugin.id];
+  }
+
+  get settingsJson() {
+    const list = [
+      {
+        key: 'askCommitMessage',
+        text: 'Ask for commit message',
+        checkbox: this.settings.askCommitMessage,
+      }
+    ];
+
+    return {
+      list,
+      cb: (key, value) => {
+        this.settings[key] = value;
+        appSettings.update();
+      }
+    }
+  }
+}
+
+/**
+ * Create a toast message
+ * @param {string} id 
+ * @param {string|HTMLElement|(hide: ()=>void)=>HTMLElement} message 
+ * @returns 
+ */
+function tutorial(id, message) {
+  if (!toast) return;
+  if (localStorage.getItem(id) === 'true') return;
+  localStorage.setItem(id, 'true');
+
+  if (typeof message === 'function') {
+    message = message(toast.hide);
+  }
+
+  toast(message, false, '#17c', '#fff');
 }
 
 if (window.acode) {
@@ -487,7 +558,7 @@ if (window.acode) {
     }
     acodePlugin.baseUrl = baseUrl;
     await acodePlugin.init($page, cacheFile, cacheFileUrl);
-  });
+  }, acodePlugin.settingsJson);
   acode.setPluginUnmount(plugin.id, () => {
     acodePlugin.destroy();
   });

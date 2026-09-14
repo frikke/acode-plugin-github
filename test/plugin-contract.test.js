@@ -76,6 +76,104 @@ test('plugin commands defer plaintext migration until a successful request', asy
   );
 });
 
+for (const session of ['legacy', 'encrypted', 'corrupt-with-legacy']) {
+  test(`early concurrent filesystem reads wait for ${session} credentials`, async () => {
+    const harness = createPluginHarness();
+    if (session === 'corrupt-with-legacy') {
+      harness.encryptedValues.set(
+        'acode.plugin.github.github-session-v1',
+        '{invalid',
+      );
+    } else if (session === 'encrypted') {
+      await withSourceModule(
+        'githubAuth/sessionStore.js',
+        harness.globals,
+        async ({ GitHubSessionStore }) => {
+          await new GitHubSessionStore({
+            storage: harness.globals.localStorage,
+          }).save({
+            version: 1,
+            kind: 'pat',
+            accessToken: 'encrypted-token',
+            accessExpiresAt: null,
+            refreshToken: null,
+            refreshExpiresAt: null,
+            accountId: 1,
+            login: 'octocat',
+            avatarUrl: null,
+          });
+        },
+      );
+    }
+    await withSourceModule(
+      'main.js',
+      harness.globals,
+      async ({ AcodePlugin }) => {
+        const plugin = new AcodePlugin(harness.dependencies);
+        const initialization = plugin.init();
+        const first = harness.openFs('gh://gist/gist-1/notes.md').readFile();
+        const second = harness.openFs('gh://gist/gist-1/notes.md').readFile();
+        assert.deepEqual(await Promise.all([first, second]), [
+          '# Notes',
+          '# Notes',
+        ]);
+        await initialization;
+        assert.equal(harness.promptCalls.length, 0);
+        assert.equal(plugin.startupError, undefined);
+        await plugin.destroy();
+      },
+    );
+  });
+}
+
+test('filesystem registration does not wait for slow account restoration', async () => {
+  const harness = createPluginHarness();
+  const ready = deferred();
+  let initialized = false;
+  let operations = 0;
+  const account = githubAppAccountController(
+    { id: 1, kind: 'pat', login: 'octocat' },
+    {
+      getGist: async () => ({ files: { 'notes.md': { content: '# Notes' } } }),
+    },
+  );
+  const run = account.run;
+  account.initialize = async () => {
+    await ready.promise;
+    initialized = true;
+    return account.getAccount();
+  };
+  account.getAccessToken = async () => {
+    assert.equal(initialized, true);
+    return 'token';
+  };
+  account.run = async (...args) => {
+    operations += 1;
+    return run(...args);
+  };
+  await withSourceModule(
+    'main.js',
+    harness.globals,
+    async ({ AcodePlugin }) => {
+      const plugin = new AcodePlugin({
+        ...harness.dependencies,
+        accountController: account,
+      });
+      const initialization = plugin.init();
+      const read = harness.openFs('gh://gist/gist-1/notes.md').readFile();
+      await Promise.resolve();
+      assert.equal(harness.fsExtensions, 1);
+      assert.equal(operations, 0);
+      ready.resolve();
+      assert.equal(await read, '# Notes');
+      await initialization;
+      assert.equal(operations, 1);
+      assert.equal(harness.promptCalls.length, 0);
+      await plugin.destroy();
+    },
+  );
+});
+
 test('authentication lifecycle remains injectable and isolated', async () => {
   const harness = createPluginHarness();
   const authCalls = { cancel: 0, resume: 0 };
@@ -830,6 +928,7 @@ function createPluginHarness() {
     updateGist: [],
   };
   let fsExtensions = 0;
+  let fsProvider;
   const settings = {
     update() {},
     value: { 'acode.plugin.github': { askCommitMessage: true } },
@@ -914,10 +1013,13 @@ function createPluginHarness() {
         confirm: async () => true,
         encodings: {},
         fs: {
-          extend() {
+          extend(_test, provider) {
             fsExtensions += 1;
+            fsProvider = provider;
           },
-          remove() {},
+          remove() {
+            fsProvider = undefined;
+          },
         },
         fsOperation: () => ({
           stat: async () => ({ name: 'keybindings.json' }),
@@ -989,6 +1091,7 @@ function createPluginHarness() {
 
   return {
     calls,
+    openFs: (url) => fsProvider(url),
     credentialWrites,
     dependencies: { createGitHub, credentialStore },
     encryptedValues: localValues,

@@ -38,6 +38,7 @@ export class AcodePlugin {
   #fsInitialized = false;
   #account;
   #accountGeneration = 0;
+  #accountReady;
   #accountRequest;
   #createGitHub;
   #createGitHubLauncher;
@@ -112,19 +113,11 @@ export class AcodePlugin {
       editorManager.editor.commands.addCommand(command);
     });
 
-    let account;
-    try {
-      account = await this.#account.initialize();
-      this.token = await this.#account.getAccessToken().catch(() => '');
-    } catch (error) {
-      this.#startupError = error;
-      this.token = '';
-    }
-    this.#currentAccountKey = accountKey(account);
-    this.#data.setAccount(account, this.#accountGeneration);
+    this.#accountReady = this.#initializeAccount();
+    await this.initFs();
+    await this.#accountReady;
     this.#resumeAuth.module ||= acode.require('intent');
     this.#resumeAuth.module?.addHandler?.(this.#resumeAuth.intent);
-    await this.initFs();
     this.#githubPage = this.#createGitHubPage({
       config: githubAuthConfig,
       onHide: () => this.#githubLauncher?.pageHidden(),
@@ -146,6 +139,19 @@ export class AcodePlugin {
     await this.#githubPage.showFirstUse(firstInit);
   }
 
+  async #initializeAccount() {
+    let account;
+    try {
+      account = await this.#account.initialize();
+      this.token = await this.#account.getAccessToken().catch(() => '');
+    } catch (error) {
+      this.#startupError = error;
+      this.token = '';
+    }
+    this.#currentAccountKey = accountKey(account);
+    this.#data.setAccount(account, this.#accountGeneration);
+  }
+
   async initFs() {
     if (this.#fsInitialized) return;
     githubFs.remove();
@@ -157,6 +163,7 @@ export class AcodePlugin {
   }
 
   async getToken() {
+    await this.#accountReady;
     try {
       this.token = await this.#account.getAccessToken();
       return this.token;
@@ -510,6 +517,7 @@ export class AcodePlugin {
   }
 
   async getInstallations({ force = false } = {}) {
+    await this.#accountReady;
     const generation = this.#accountGeneration;
     const account = await this.#account.getAccount();
     if (generation !== this.#accountGeneration) return [];
@@ -649,6 +657,7 @@ export class AcodePlugin {
   }
 
   async getAccount() {
+    await this.#accountReady;
     return this.#account.getAccount();
   }
 
@@ -669,10 +678,12 @@ export class AcodePlugin {
   }
 
   async signInWithGitHub(options) {
+    await this.#accountReady;
     return this.#account.signInWithGitHub(options);
   }
 
   async usePersonalAccessToken(token) {
+    await this.#accountReady;
     const account = await this.#account.usePersonalAccessToken(token);
     this.token = await this.#account.getAccessToken();
     this.#fsInitialized = false;
@@ -681,6 +692,7 @@ export class AcodePlugin {
   }
 
   async signOut() {
+    await this.#accountReady;
     await this.#account.signOut();
     this.token = '';
     this.#fsInitialized = false;

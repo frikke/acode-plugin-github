@@ -82,12 +82,12 @@
   font-weight: 700;
 }
 
-.g-ts > .tab-indicator {
+.github-page .main > .g-ts > .tab-indicator {
   width: 50%;
   transition: transform 180ms;
 }
 
-.g-ts[data-active="gists"] > .tab-indicator {
+.github-page .main > .g-ts[data-active="gists"] > .tab-indicator {
   transform: translateX(100%);
 }
 
@@ -491,7 +491,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .g-ts > .tab-indicator {
+  .github-page .main > .g-ts > .tab-indicator {
     transition: none;
   }
 }

@@ -946,6 +946,57 @@ test('workspace stylesheet stays scoped to Acode primitives and theme tokens', (
   assert.doesNotMatch(source, /className: ['"](?:container|value)['"]/);
 });
 
+for (const reducedMotion of [false, true]) {
+  test(`tab underline overrides Acode width (reduced motion: ${reducedMotion})`, async () => {
+    const harness = createHarness({ signedIn: true });
+    harness.window.happyDOM.settings.device.prefersReducedMotion = reducedMotion
+      ? 'reduce'
+      : 'no-preference';
+    const hostStyle = harness.window.document.createElement('style');
+    // Compiled selector and geometry from Acode's styles/page.scss.
+    hostStyle.textContent = `
+    wc-page .main > .options { position: relative; display: flex; height: 40px; }
+    wc-page .main > .options > * { position: relative; display: flex; flex: 1; }
+    wc-page .main > .options .tab-indicator {
+      position: absolute; bottom: 0; left: 0; height: 2px; width: 1px;
+      background-color: var(--active-color); transform-origin: left center;
+    }
+  `;
+    harness.window.document.documentElement.style.setProperty(
+      '--active-color',
+      'rgb(51, 153, 255)',
+    );
+    harness.window.document.head.append(hostStyle);
+    await withSourceModule(
+      'githubPage.js',
+      harness.globals,
+      async ({ GitHubPage }) => {
+        const page = installPage(harness, GitHubPage);
+        await page.open();
+        await settle(4);
+        const indicator = harness.page.querySelector('.tab-indicator');
+        for (const label of ['Repositories', 'Gists', 'Repositories']) {
+          findButton(harness.page, label).click();
+          const style = harness.window.getComputedStyle(indicator);
+          assert.equal(style.width, '50%');
+          assert.equal(style.height, '2px');
+          assert.equal(style.position, 'absolute');
+          assert.equal(style.backgroundColor, 'rgb(51, 153, 255)');
+          assert.equal(
+            style.transform,
+            label === 'Gists' ? 'translateX(100%)' : '',
+          );
+        }
+        assert.equal(
+          harness.window.getComputedStyle(indicator).transition,
+          reducedMotion ? 'none' : 'transform 180ms',
+        );
+        page.destroy();
+      },
+    );
+  });
+}
+
 test('branch layout overrides Acode list flex and action overflow', () => {
   const window = new Window();
   const acodeStyle = window.document.createElement('style');
